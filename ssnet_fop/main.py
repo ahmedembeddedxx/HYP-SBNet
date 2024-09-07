@@ -1,4 +1,3 @@
-
 from __future__ import division
 from __future__ import print_function
 
@@ -16,14 +15,28 @@ import torch.backends.cudnn as cudnn
 import pandas as pd
 from scipy import random
 from sklearn import preprocessing
-# import matplotlib.pyplot as plt
 import torch.nn.functional as F
 import torch.nn as nn
 
 from tqdm import tqdm
+from retrieval_model import FOP, HyperbolicLoss  # Updated import
 
+class RunningAverage(object):
+    def __init__(self):
+        self.value_sum = 0.
+        self.num_items = 0. 
 
-# In[0]
+    def update(self, val):
+        self.value_sum += val 
+        self.num_items += 1
+
+    def avg(self):
+        average = 0.
+        if self.num_items > 0:
+            average = self.value_sum / self.num_items
+
+        return average
+
 
 def read_data(FLAGS):
     
@@ -124,14 +137,12 @@ def read_data(FLAGS):
     
     return train_data, train_label
 
-
-# In[1]
-from retrieval_model import FOP
- 
 def get_batch(batch_index, batch_size, labels, f_lst):
     start_ind = batch_index * batch_size
     end_ind = (batch_index + 1) * batch_size
     return np.asarray(f_lst[start_ind:end_ind]), np.asarray(labels[start_ind:end_ind])
+
+
 
 def init_weights(m):
     if type(m) == nn.Linear:
@@ -139,25 +150,23 @@ def init_weights(m):
         m.bias.data.fill_(0.01)
 
 def main(train_data, train_label):
-    
     n_class = 901
     model = FOP(FLAGS, train_data.shape[1], n_class)
     model.apply(init_weights)
     
     ce_loss = nn.CrossEntropyLoss().cuda()
-    opl_loss = OrthogonalProjectionLoss().cuda()
+    hyperbolic_loss = HyperbolicLoss(FLAGS).cuda()  # Use Hyperbolic Loss
     
     if FLAGS.cuda:
         model.cuda()
         ce_loss.cuda()    
-        opl_loss.cuda()
+        hyperbolic_loss.cuda()
         cudnn.benchmark = True
     
     optimizer = optim.Adam(model.parameters(), lr=FLAGS.lr, weight_decay=0.01)
 
     n_parameters = sum([p.data.nelement() for p in model.parameters()])
     print('  + Number of params: {}'.format(n_parameters))
-    
     
     for alpha in FLAGS.alpha_list:
         eer_list = []
@@ -170,7 +179,7 @@ def main(train_data, train_label):
         d_fac_per_epoch = 0
         txt_dir = 'output'
         save_dir = 'fc2_%s_%s_alpha_%0.2f'%(FLAGS.split_type, FLAGS.save_dir, alpha)
-        txt = '%s/ce_opl_%03d_%0.2f.txt'%(txt_dir, FLAGS.max_num_epoch, alpha)
+        txt = '%s/ce_hyperbolic_%03d_%0.2f.txt'%(txt_dir, FLAGS.max_num_epoch, alpha)
         
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
@@ -190,10 +199,9 @@ def main(train_data, train_label):
                 print('%s\tEpoch %03d'%(FLAGS.split_type, epoch))
                 for idx in tqdm(range(num_of_batches)):
                     train_batch, batch_labels = get_batch(idx, FLAGS.batch_size, train_label, train_data)
-                    # voice_feats, _ = get_batch(idx, FLAGS.batch_size, train_label, voice_train)
-                    loss_tmp, loss_opl, loss_soft, s_fac, d_fac = train(train_batch, 
+                    loss_tmp, loss_hyperbolic, loss_soft, s_fac, d_fac = train(train_batch, 
                                                                  batch_labels, 
-                                                                 model, optimizer, ce_loss, opl_loss, alpha)
+                                                                 model, optimizer, ce_loss, hyperbolic_loss, alpha)
                     loss_per_epoch+=loss_tmp
                     s_fac_per_epoch+=s_fac
                     d_fac_per_epoch+=d_fac
@@ -228,114 +236,45 @@ def main(train_data, train_label):
                 d_fac_per_epoch = 0
                 epoch += 1
         
-                
         return loss_plot, min_eer, max_auc
-    
-class OrthogonalProjectionLoss(nn.Module):
-    def __init__(self):
-        super(OrthogonalProjectionLoss, self).__init__()
-        self.device = (torch.device('cuda') if FLAGS.cuda else torch.device('cpu'))
 
-    def forward(self, features, labels=None):
-        
-        features = F.normalize(features, p=2, dim=1)
-
-        labels = labels[:, None]
-
-        mask = torch.eq(labels, labels.t()).bool().to(self.device)
-        eye = torch.eye(mask.shape[0], mask.shape[1]).bool().to(self.device)
-
-        mask_pos = mask.masked_fill(eye, 0).float()
-        mask_neg = (~mask).float()
-        dot_prod = torch.matmul(features, features.t())
-
-        pos_pairs_mean = (mask_pos * dot_prod).sum() / (mask_pos.sum() + 1e-6)
-        neg_pairs_mean = torch.abs(mask_neg * dot_prod).sum() / (mask_neg.sum() + 1e-6)
-
-        loss = (1.0 - pos_pairs_mean) + (0.7 * neg_pairs_mean)
-
-        return loss, pos_pairs_mean, neg_pairs_mean
-
-
-def train(train_batch, labels, model, optimizer, ce_loss, opl_loss, alpha):
-    
+def train(train_batch, labels, model, optimizer, ce_loss, hyperbolic_loss, alpha):
     average_loss = RunningAverage()
     soft_losses = RunningAverage()
-    opl_losses = RunningAverage()
+    hyperbolic_losses = RunningAverage()
 
     model.train()
-    # face_feats = torch.from_numpy(face_feats).float()
     train_batch = torch.from_numpy(train_batch).float()
-    labels = torch.from_numpy(labels)
-    
+    labels = torch.from_numpy(labels).long()
     if FLAGS.cuda:
-        train_batch, labels = train_batch.cuda(), labels.cuda()
+        train_batch = train_batch.cuda()
+        labels = labels.cuda()
 
-    train_batch, labels = Variable(train_batch), Variable(labels)
-    comb = model.train_forward(train_batch)
+    logits, embeddings = model(train_batch)
     
-    loss_opl, s_fac, d_fac = opl_loss(comb[0], labels)
-    
-    loss_soft = ce_loss(comb[1], labels)
-    
-    loss = loss_soft + alpha * loss_opl
-
+    loss = alpha * hyperbolic_loss(embeddings, labels)[0] + (1 - alpha)
     optimizer.zero_grad()
-    
     loss.backward()
-    average_loss.update(loss.item())
-    opl_losses.update(loss_opl.item())
-    soft_losses.update(loss_soft.item())
-    
     optimizer.step()
-
-    return average_loss.avg(), opl_losses.avg(), soft_losses.avg(), s_fac, d_fac
-
-class RunningAverage(object):
-    def __init__(self):
-        self.value_sum = 0.
-        self.num_items = 0. 
-
-    def update(self, val):
-        self.value_sum += val 
-        self.num_items += 1
-
-    def avg(self):
-        average = 0.
-        if self.num_items > 0:
-            average = self.value_sum / self.num_items
-
-        return average
- 
-def save_checkpoint(state, directory, filename):
-    filename = os.path.join(directory, filename)
-    torch.save(state, filename)
     
+    with torch.no_grad():
+        average_loss.update(loss.item())
+        soft_losses.update(ce_loss(logits, labels).item())
+        hyperbolic_losses.update(hyperbolic_loss(embeddings, labels)[0].item())
+        
+    return average_loss.avg, hyperbolic_losses.avg, soft_losses.avg, hyperbolic_losses.avg, soft_losses.avg
+
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--seed', type=int, default=1, metavar='S', help='Random Seed')
-    parser.add_argument('--cuda', action='store_true', default=True, help='CUDA Training')
-    parser.add_argument('--save_dir', type=str, default='model', help='Directory for saving checkpoints.')
-    parser.add_argument('--lr', type=float, default=1e-2, metavar='LR',
-                        help='learning rate (default: 1e-4)') 
-    parser.add_argument('--batch_size', type=int, default=128, help='Batch size for training.')
-    parser.add_argument('--max_num_epoch', type=int, default=500, help='Max number of epochs to train, number')
-    parser.add_argument('--alpha_list', type=list, default=[1], help='Alpha Values List')
-    parser.add_argument('--dim_embed', type=int, default=128,
-                        help='Embedding Size')
-    parser.add_argument('--split_type', type=str, default='hefhev', help='split_type')
-
-    global FLAGS
-    FLAGS, unparsed = parser.parse_known_args()
-    torch.manual_seed(FLAGS.seed)
-    if FLAGS.cuda and torch.cuda.is_available():
-        torch.cuda.manual_seed(FLAGS.seed)
-    if FLAGS.split_type == 'voice_only' or FLAGS.split_type == 'face_only':
-        import onlineTestSingleModality
-        test_feat = onlineTestSingleModality.read_data(FLAGS)
-    else:
-        import online_evaluation
-        test_feat = online_evaluation.read_data()
-    train_data, train_label = read_data(FLAGS)
+    parser = argparse.ArgumentParser(description='Hyperbolic Loss for Face Verification')
+    parser.add_argument('--split_type', default='voice_only', type=str)
+    parser.add_argument('--save_dir', default='my_experiment', type=str)
+    parser.add_argument('--dim_embed', default=256, type=int)
+    parser.add_argument('--max_num_epoch', default=100, type=int)
+    parser.add_argument('--alpha_list', default=[0.5], type=list)
+    parser.add_argument('--batch_size', default=128, type=int)
+    parser.add_argument('--lr', default=1e-3, type=float)
+    parser.add_argument('--cuda', default=True, type=bool)
+    FLAGS = parser.parse_args()
     
+    train_data, train_label = read_data(FLAGS)
     main(train_data, train_label)

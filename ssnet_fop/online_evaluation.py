@@ -71,7 +71,6 @@ def calculate_val_far(threshold, dist, actual_issame):
     val = float(true_accept) / float(n_same)
     far = float(false_accept) / float(n_diff)
     return val, far
-
 def calculate_val(thresholds, embeddings1, embeddings2, actual_issame, far_target, nrof_folds=10):
     assert (embeddings1.shape[0] == embeddings2.shape[0])
     assert (embeddings1.shape[1] == embeddings2.shape[1])
@@ -84,6 +83,7 @@ def calculate_val(thresholds, embeddings1, embeddings2, actual_issame, far_targe
 
     diff = np.subtract(embeddings1, embeddings2)
     dist = np.sum(np.square(diff), 1)
+    #dist = poincare_distances(embeddings1, embeddings2)
     indices = np.arange(nrof_pairs)
 
     for fold_idx, (train_set, test_set) in enumerate(k_fold.split(indices)):
@@ -105,6 +105,24 @@ def calculate_val(thresholds, embeddings1, embeddings2, actual_issame, far_targe
     val_std = np.std(val)
     return val_mean, val_std, far_mean
 
+
+def norm(x, axis=None):
+    #print(x.shape)
+    return np.linalg.norm(x, axis=axis)
+
+# distance in poincare disk
+def poincare_dist(u, v, eps=1e-5):
+    d = 1 + 2 * norm(u-v)**2 / ((1 - norm(u)**2) * (1 - norm(v)**2) + eps)
+    return np.arccosh(d)
+
+def poincare_distances(embedding1, embedding2):
+    n = embedding1.shape[0]
+    dists = np.zeros(n,)
+    print(dists.shape)
+    for i in range(n):
+        dists[i] = poincare_dist(embedding1[i], embedding2[i])
+    return dists
+
 def calculate_roc(thresholds, embeddings1, embeddings2, actual_issame, nrof_folds=10):
     
     assert (embeddings1.shape[0] == embeddings2.shape[0])
@@ -119,6 +137,10 @@ def calculate_roc(thresholds, embeddings1, embeddings2, actual_issame, nrof_fold
 
     diff = np.subtract(embeddings1, embeddings2)
     dist = np.sum(np.square(diff), 1)
+    #print("dist old" + str(dist.shape))
+    # hyperbolic distance
+    #dist = poincare_distances(embeddings1, embeddings2)
+    print("dist hyp" + str(dist.shape))
     indices = np.arange(nrof_pairs)
 
     for fold_idx, (train_set, test_set) in enumerate(k_fold.split(indices)):
