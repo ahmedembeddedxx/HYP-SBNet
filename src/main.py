@@ -20,6 +20,7 @@ import torch.nn as nn
 
 from tqdm import tqdm
 from retrieval_model import FOP, HyperbolicLoss  # Updated import
+import online_evaluation 
 
 class RunningAverage(object):
     def __init__(self):
@@ -216,11 +217,23 @@ def main(train_data, train_label):
                 else:
                     eer, auc = online_evaluation.test(FLAGS, model, test_feat)
                 
+                # Debugging print statements
+                print(f"EER: {eer}")
+                print(f"AUC: {auc}")
+                
+                # Check for None values
+                if eer is None or auc is None:
+                    print("Error: EER or AUC is None. Skipping this epoch.")
+                    eer = float('nan')  # Assign NaN to ensure no errors during logging
+                    auc = float('nan')
+                
                 eer_list.append(eer)
                 auc_list.append(auc)
+                
+                checkpoint_filename = 'checkpoint_%04d_%0.3f.pth.tar' % (epoch, eer * 100 if eer is not None else 0)
                 save_checkpoint({
                     'epoch': epoch,
-                    'state_dict': model.state_dict()}, save_dir, 'checkpoint_%04d_%0.3f.pth.tar' % (epoch, eer*100))
+                    'state_dict': model.state_dict()}, save_dir, checkpoint_filename)
 
                 print('==> Epoch: %d/%d Loss: %0.2f Alpha:%0.2f, Min_EER: %0.2f' % (epoch, FLAGS.max_num_epoch, loss_per_epoch, alpha, min(eer_list)))
                 
@@ -236,6 +249,7 @@ def main(train_data, train_label):
                 epoch += 1
         
         return loss_plot, min(eer_list), max(auc_list)
+
 
 def train(train_batch, labels, model, optimizer, hyperbolic_loss, alpha):
     average_loss = RunningAverage()
@@ -269,7 +283,7 @@ def train(train_batch, labels, model, optimizer, hyperbolic_loss, alpha):
     loss.backward()
     optimizer.step()
     
-    return average_loss.avg(), hyperbolic_losses.avg(), soft_losses.avg(), s_fac.mean().item(), d_fac.mean().item()
+    return average_loss.avg(), hyperbolic_losses.avg(), soft_losses.avg(), s_fac.mean().item(), s_fac.std().item()
 
 def save_checkpoint(state, path, filename):
     torch.save(state, os.path.join(path, filename))

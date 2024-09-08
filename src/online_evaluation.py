@@ -177,22 +177,25 @@ def evaluate(embeddings, actual_issame, nrof_folds=10):
     return tpr, fpr, accuracy, val, val_std, far
 
 def test(args, model, test_feat):
-
     model.eval()
     model.cuda()
 
-
-    test_feat = tf.convert_to_tensor(test_feat, dtype=tf.float32)    
- 
-    test_feat = tf.Variable(test_feat)
+    test_feat = torch.from_numpy(test_feat).float().cuda()
+    print("Testing features shape:", test_feat.shape)
 
     with torch.no_grad():
-        feat_list, _ = model(test_feat)
         
-        feat_list = feat_list.data
+        try:
+            feat_list, _ = model(test_feat)
+            feat_list = feat_list.cpu().detach().numpy()
+        except RuntimeError as e:
+            if 'out of memory' in str(e):
+                print("Out of memory. Freeing up cache.")
+                torch.cuda.empty_cache()
+                return None, None  # Handle this appropriately
+            else:
+                raise e
         
-        feat_list = feat_list.cpu().detach().numpy()
-    
         print('Total Number of Samples: ', len(feat_list))
     
         issame_lst = same_func(feat_list)
@@ -204,12 +207,10 @@ def test(args, model, test_feat):
     
         auc = metrics.auc(fpr, tpr)
         print('Area Under Curve (AUC): %1.3f' % auc)
-        fnr = 1-tpr
-        abs_diffs = np.abs(fpr-fnr)
+        fnr = 1 - tpr
+        abs_diffs = np.abs(fpr - fnr)
         min_index = np.argmin(abs_diffs)
         eer = np.mean((fpr[min_index], fnr[min_index]))
-        # eer = fpr[np.nanargmin(np.absolute((fnr - fpr)))]
-    #    eer = brentq(lambda x: 1. - x - interpolate.interp1d(fpr, tpr)(x), 0., 1.)
         print('Equal Error Rate (EER): %1.3f\n\n' % eer)
     
     return eer, auc
