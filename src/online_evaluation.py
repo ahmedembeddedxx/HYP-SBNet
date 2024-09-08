@@ -11,6 +11,7 @@ from sklearn import metrics
 # from scipy.optimize import brentq
 from sklearn.model_selection import KFold
 from scipy import interpolate
+import tensorflow as tf
 
 def read_data():
     
@@ -179,9 +180,11 @@ def test(args, model, test_feat):
 
     model.eval()
     model.cuda()
+
+    #convert to tensor without test_feat = test_feat.cuda()
+
+    test_feat = tf.convert_to_tensor(test_feat, dtype=tf.float32)    
  
-    if args.cuda:
-        test_feat = test_feat.cuda()
     test_feat = Variable(test_feat)
 
     with torch.no_grad():

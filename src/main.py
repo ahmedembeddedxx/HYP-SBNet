@@ -1,280 +1,216 @@
+
 from __future__ import division
 from __future__ import print_function
 
-import argparse
-import os
-os.environ['CUDA_VISIBLE_DEVICES'] = "0"
-
 import numpy as np
 import torch
-import torch.optim as optim
-import torch.utils.data
 from torch.autograd import Variable
-import torch.backends.cudnn as cudnn
 
 import pandas as pd
-from scipy import random
-from sklearn import preprocessing
-import torch.nn.functional as F
-import torch.nn as nn
+from sklearn import metrics
+# from scipy.optimize import brentq
+from sklearn.model_selection import KFold
+from scipy import interpolate
+import tensorflow as tf
 
-from tqdm import tqdm
-from retrieval_model import FOP, HyperbolicLoss  # Updated import
+def read_data():
+    
+    test_file_face = '../data/face/facenet_face_veriflist_test_random_unseenunheard.csv'
+    test_file_voice = '../data/voice/voice_veriflist_test_random_unseenunheard.csv'
 
-class RunningAverage(object):
-    def __init__(self):
-        self.value_sum = 0.
-        self.num_items = 0. 
-
-    def update(self, val):
-        self.value_sum += val 
-        self.num_items += 1
-
-    def avg(self):
-        average = 0.
-        if self.num_items > 0:
-            average = self.value_sum / self.num_items
-
-        return average
-
-
-def read_data(FLAGS):
+    print('Reading Test Faces')
+    face_test = pd.read_csv(test_file_face, header=None)
+    print('Reading Test Voices')
+    voice_test = pd.read_csv(test_file_voice, header=None)
     
-    print('Split Type: %s'%(FLAGS.split_type))
+    face_test = np.asarray(face_test)[:,:512]
+    voice_test = np.asarray(voice_test)[:,:512]
     
-    if FLAGS.split_type == 'voice_only':
-        print('Reading Voice Train')
-        train_file_voice = '../data/voice/voiceTrain.csv'
-        train_data = pd.read_csv(train_file_voice, header=None)
-        train_label = train_data[512]
-        le = preprocessing.LabelEncoder()
-        le.fit(train_label)
-        train_label = le.transform(train_label)
-        train_data = np.asarray(train_data)
-        train_data = train_data[:, :-1]
-        
-        return train_data, train_label
-        
-    elif FLAGS.split_type == 'face_only':
-        print('Reading Face Train')
-        train_file_face = '../data/face/facenetfaceTrain.csv'
-        train_data = pd.read_csv(train_file_face, header=None)
-        train_label = train_data[512]
-        le = preprocessing.LabelEncoder()
-        le.fit(train_label)
-        train_label = le.transform(train_label)
-        train_data = np.asarray(train_data)
-        train_data = train_data[:, :-1]
-        
-        return train_data, train_label
+    test_list = []
+    for dat in range(len(voice_test)):
+        test_list.append(voice_test[dat])
+        test_list.append(face_test[dat])
     
-    train_data = []
-    train_label = []
+    test_list = np.asarray(test_list)
+    test_feat = torch.from_numpy(test_list).float()
     
-    train_file_face = '../data/face/facenetfaceTrain.csv'
-    train_file_voice = '../data/voice/voiceTrain.csv'
-    
-    print('Reading Train Faces')
-    img_train = pd.read_csv(train_file_face, header=None)
-    train_tmp = img_train[512]
-    img_train = np.asarray(img_train)
-    img_train = img_train[:, :-1]
-    
-    train_tmp = np.asarray(train_tmp)
-    train_tmp = train_tmp.reshape((train_tmp.shape[0], 1))
-    print('Reading Train Voices')
-    voice_train = pd.read_csv(train_file_voice, header=None)
-    voice_train = np.asarray(voice_train)
-    voice_train = voice_train[:, :-1]
-    
-    combined = list(zip(img_train, voice_train, train_tmp))
-    random.shuffle(combined)
-    img_train, voice_train, train_tmp = zip(*combined)
-    
-    if FLAGS.split_type == 'random':
-        train_data = np.vstack((img_train, voice_train))
-        train_label = np.vstack((train_tmp, train_tmp))
-        combined = list(zip(train_data, train_label))
-        random.shuffle(combined)
-        train_data, train_label = zip(*combined)
-        train_data = np.asarray(train_data).astype(np.float)
-        train_label = np.asarray(train_label)
-    
-    elif FLAGS.split_type == 'vfvf':
-        for i in range(len(voice_train)):
-            train_data.append(voice_train[i])
-            train_data.append(img_train[i])
-            train_label.append(train_tmp[i])
-            train_label.append(train_tmp[i])
-            
-    elif FLAGS.split_type == 'fvfv':
-        for i in range(len(voice_train)):
-            train_data.append(img_train[i])
-            train_data.append(voice_train[i])
-            train_label.append(train_tmp[i])
-            train_label.append(train_tmp[i])        
-    
-    elif FLAGS.split_type == 'hefhev':
-        train_data = np.vstack((img_train, voice_train))
-        train_label = np.vstack((train_tmp, train_tmp))
-        
-    elif FLAGS.split_type == 'hevhef':
-        train_data = np.vstack((voice_train, img_train))
-        train_label = np.vstack((train_tmp, train_tmp))
-    
-    else:
-        print('Invalid Split Type')
-    
-    le = preprocessing.LabelEncoder()
-    le.fit(train_label)
-    train_label = le.transform(train_label)
-    
-    print("Train file length", len(img_train))
-    print('Shuffling\n')
-    
-    train_data = np.asarray(train_data).astype(np.float)
-    train_label = np.asarray(train_label)
-    
-    return train_data, train_label
-
-def get_batch(batch_index, batch_size, labels, f_lst):
-    start_ind = batch_index * batch_size
-    end_ind = (batch_index + 1) * batch_size
-    return np.asarray(f_lst[start_ind:end_ind]), np.asarray(labels[start_ind:end_ind])
+    # face_test = torch.from_numpy(face_test).float()
+    # voice_test = torch.from_numpy(voice_test).float()
+    return test_feat
 
 
+# In[1]
 
-def init_weights(m):
-    if type(m) == nn.Linear:
-        torch.nn.init.xavier_uniform(m.weight)
-        m.bias.data.fill_(0.01)
+def same_func(f):
+    issame_lst = []
+    for idx in range(len(f)):
+        if idx % 2 == 0:
+            issame = True
+        else:
+            issame = False
+        issame_lst.append(issame)
+    return issame_lst
 
-def main(train_data, train_label):
-    n_class = 901
-    model = FOP(FLAGS, train_data.shape[1], n_class)
-    model.apply(init_weights)
+def calculate_accuracy(threshold, dist, actual_issame):
+    predict_issame = np.less(dist, threshold)
+    tp = np.sum(np.logical_and(predict_issame, actual_issame))
+    fp = np.sum(np.logical_and(predict_issame, np.logical_not(actual_issame)))
+    tn = np.sum(np.logical_and(np.logical_not(predict_issame), np.logical_not(actual_issame)))
+    fn = np.sum(np.logical_and(np.logical_not(predict_issame), actual_issame))
+
+    tpr = 0 if (tp + fn == 0) else float(tp) / float(tp + fn)
+    fpr = 0 if (fp + tn == 0) else float(fp) / float(fp + tn)
+    acc = float(tp + tn) / dist.size
+    return tpr, fpr, acc
+
+def calculate_val_far(threshold, dist, actual_issame):
+    predict_issame = np.less(dist, threshold)
+    true_accept = np.sum(np.logical_and(predict_issame, actual_issame))
+    false_accept = np.sum(np.logical_and(predict_issame, np.logical_not(actual_issame)))
+    n_same = np.sum(actual_issame)
+    n_diff = np.sum(np.logical_not(actual_issame))
+    val = float(true_accept) / float(n_same)
+    far = float(false_accept) / float(n_diff)
+    return val, far
+def calculate_val(thresholds, embeddings1, embeddings2, actual_issame, far_target, nrof_folds=10):
+    assert (embeddings1.shape[0] == embeddings2.shape[0])
+    assert (embeddings1.shape[1] == embeddings2.shape[1])
+    nrof_pairs = min(len(actual_issame), embeddings1.shape[0])
+    nrof_thresholds = len(thresholds)
+    k_fold = KFold(n_splits=nrof_folds, shuffle=False)
+
+    val = np.zeros(nrof_folds)
+    far = np.zeros(nrof_folds)
+
+    diff = np.subtract(embeddings1, embeddings2)
+    dist = np.sum(np.square(diff), 1)
+    #dist = poincare_distances(embeddings1, embeddings2)
+    indices = np.arange(nrof_pairs)
+
+    for fold_idx, (train_set, test_set) in enumerate(k_fold.split(indices)):
+
+        # Find the threshold that gives FAR = far_target
+        far_train = np.zeros(nrof_thresholds)
+        for threshold_idx, threshold in enumerate(thresholds):
+            _, far_train[threshold_idx] = calculate_val_far(threshold, dist[train_set], actual_issame[train_set])
+        if np.max(far_train) >= far_target:
+            f = interpolate.interp1d(far_train, thresholds, kind='slinear')
+            threshold = f(far_target)
+        else:
+            threshold = 0.0
+
+        val[fold_idx], far[fold_idx] = calculate_val_far(threshold, dist[test_set], actual_issame[test_set])
+
+    val_mean = np.mean(val)
+    far_mean = np.mean(far)
+    val_std = np.std(val)
+    return val_mean, val_std, far_mean
+
+
+def norm(x, axis=None):
+    #print(x.shape)
+    return np.linalg.norm(x, axis=axis)
+
+# distance in poincare disk
+def poincare_dist(u, v, eps=1e-5):
+    d = 1 + 2 * norm(u-v)**2 / ((1 - norm(u)**2) * (1 - norm(v)**2) + eps)
+    return np.arccosh(d)
+
+def poincare_distances(embedding1, embedding2):
+    n = embedding1.shape[0]
+    dists = np.zeros(n,)
+    print(dists.shape)
+    for i in range(n):
+        dists[i] = poincare_dist(embedding1[i], embedding2[i])
+    return dists
+
+def calculate_roc(thresholds, embeddings1, embeddings2, actual_issame, nrof_folds=10):
     
-    ce_loss = nn.CrossEntropyLoss().cuda()
-    hyperbolic_loss = HyperbolicLoss(FLAGS).cuda()  # Use Hyperbolic Loss
-    
-    if FLAGS.cuda:
-        model.cuda()
-        ce_loss.cuda()    
-        hyperbolic_loss.cuda()
-        cudnn.benchmark = True
-    
-    optimizer = optim.Adam(model.parameters(), lr=FLAGS.lr, weight_decay=0.01)
+    assert (embeddings1.shape[0] == embeddings2.shape[0])
+    assert (embeddings1.shape[1] == embeddings2.shape[1])
+    nrof_pairs = min(len(actual_issame), embeddings1.shape[0])
+    nrof_thresholds = len(thresholds)
+    k_fold = KFold(n_splits=nrof_folds, shuffle=False)
 
-    n_parameters = sum([p.data.nelement() for p in model.parameters()])
-    print('  + Number of params: {}'.format(n_parameters))
+    tprs = np.zeros((nrof_folds, nrof_thresholds))
+    fprs = np.zeros((nrof_folds, nrof_thresholds))
+    accuracy = np.zeros((nrof_folds))
+
+    diff = np.subtract(embeddings1, embeddings2)
+    dist = np.sum(np.square(diff), 1)
+    #print("dist old" + str(dist.shape))
+    # hyperbolic distance
+    #dist = poincare_distances(embeddings1, embeddings2)
+    print("dist hyp" + str(dist.shape))
+    indices = np.arange(nrof_pairs)
+
+    for fold_idx, (train_set, test_set) in enumerate(k_fold.split(indices)):
+
+        # Find the best threshold for the fold
+        acc_train = np.zeros((nrof_thresholds))
+        for threshold_idx, threshold in enumerate(thresholds):
+            _, _, acc_train[threshold_idx] = calculate_accuracy(threshold, dist[train_set], actual_issame[train_set])
+        best_threshold_index = np.argmax(acc_train)
+        for threshold_idx, threshold in enumerate(thresholds):
+            tprs[fold_idx, threshold_idx], fprs[fold_idx, threshold_idx], _ = calculate_accuracy(threshold,
+                                                                                                 dist[test_set],
+                                                                                                 actual_issame[
+                                                                                                     test_set])
+        _, _, accuracy[fold_idx] = calculate_accuracy(thresholds[best_threshold_index], dist[test_set],
+                                                      actual_issame[test_set])
+
+    tpr = np.mean(tprs, 0)
+    fpr = np.mean(fprs, 0)
+    return tpr, fpr, accuracy
+
+def evaluate(embeddings, actual_issame, nrof_folds=10):
+    thresholds = np.arange(0, 4, 0.01)
+    embeddings1 = embeddings[0::2]
+    embeddings2 = embeddings[1::2]
+    tpr, fpr, accuracy = calculate_roc(thresholds, embeddings1, embeddings2,
+                                       np.asarray(actual_issame), nrof_folds=nrof_folds)
+    thresholds = np.arange(0, 4, 0.001)
+    val, val_std, far = calculate_val(thresholds, embeddings1, embeddings2,
+                                      np.asarray(actual_issame), 1e-3, nrof_folds=nrof_folds)
     
-    for alpha in FLAGS.alpha_list:
-        eer_list = []
-        epoch=1
-        num_of_batches = (len(train_label) // FLAGS.batch_size)
-        loss_plot = []
-        auc_list = []
-        loss_per_epoch = 0
-        s_fac_per_epoch = 0
-        d_fac_per_epoch = 0
-        txt_dir = 'output'
-        save_dir = 'fc2_%s_%s_alpha_%0.2f'%(FLAGS.split_type, FLAGS.save_dir, alpha)
-        txt = '%s/ce_hyperbolic_%03d_%0.2f.txt'%(txt_dir, FLAGS.max_num_epoch, alpha)
-        
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-        
-        if not os.path.exists(txt_dir):
-            os.makedirs(txt_dir)
-        
-        with open(txt,'w+') as f:
-            f.write('EPOCH\tLOSS\tEER\tAUC\tS_FAC\tD_FAC\n')
-        
-        save_best = 'best_%s'%(save_dir)
-        
-        if not os.path.exists(save_best):
-            os.mkdir(save_best)
-        with open(txt,'a+') as f:
-            while (epoch < FLAGS.max_num_epoch):
-                print('%s\tEpoch %03d'%(FLAGS.split_type, epoch))
-                for idx in tqdm(range(num_of_batches)):
-                    train_batch, batch_labels = get_batch(idx, FLAGS.batch_size, train_label, train_data)
-                    loss_tmp, loss_hyperbolic, loss_soft, s_fac, d_fac = train(train_batch, 
-                                                                 batch_labels, 
-                                                                 model, optimizer, ce_loss, hyperbolic_loss, alpha)
-                    loss_per_epoch+=loss_tmp
-                    s_fac_per_epoch+=s_fac
-                    d_fac_per_epoch+=d_fac
-                
-                loss_per_epoch/=num_of_batches
-                s_fac_per_epoch/=num_of_batches
-                d_fac_per_epoch/=num_of_batches
-                
-                loss_plot.append(loss_per_epoch)
-                if FLAGS.split_type == 'voice_only' or FLAGS.split_type == 'face_only':
-                    eer, auc = onlineTestSingleModality.test(FLAGS, model, test_feat)
-                else:
-                    eer, auc = online_evaluation.test(FLAGS, model, test_feat)
-                eer_list.append(eer)
-                auc_list.append(auc)
-                save_checkpoint({
-                    'epoch': epoch,
-                    'state_dict': model.state_dict()}, save_dir, 'checkpoint_%04d_%0.3f.pth.tar'%(epoch, eer*100))
+    print('\nEvaluating')
+    return tpr, fpr, accuracy, val, val_std, far
 
-                print('==> Epoch: %d/%d Loss: %0.2f Alpha:%0.2f, Min_EER: %0.2f'%(epoch, FLAGS.max_num_epoch, loss_per_epoch, alpha, min(eer_list)))
-                
-                if eer <= min(eer_list):
-                    min_eer = eer
-                    max_auc = auc
-                    save_checkpoint({
-                    'epoch': epoch,
-                    'state_dict': model.state_dict()}, save_best, 'checkpoint.pth.tar')
-            
-                f.write('%04d\t%0.4f\t%0.2f\t%0.2f\t%0.2f\t%0.2f\n'%(epoch, loss_per_epoch, eer, auc, s_fac_per_epoch, d_fac_per_epoch))
-                loss_per_epoch = 0
-                s_fac_per_epoch = 0
-                d_fac_per_epoch = 0
-                epoch += 1
-        
-        return loss_plot, min_eer, max_auc
+def test(args, model, test_feat):
 
-def train(train_batch, labels, model, optimizer, ce_loss, hyperbolic_loss, alpha):
-    average_loss = RunningAverage()
-    soft_losses = RunningAverage()
-    hyperbolic_losses = RunningAverage()
+    model.eval()
+    model.cuda()
 
-    model.train()
-    train_batch = torch.from_numpy(train_batch).float()
-    labels = torch.from_numpy(labels).long()
-    if FLAGS.cuda:
-        train_batch = train_batch.cuda()
-        labels = labels.cuda()
+    #convert to tensor without test_feat = test_feat.cuda()
 
-    logits, embeddings = model(train_batch)
-    
-    loss = alpha * hyperbolic_loss(embeddings, labels)[0] + (1 - alpha)
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-    
+    test_feat = tf.convert_to_tensor(test_feat, dtype=tf.float32)    
+ 
+    test_feat = tf.Variable(test_feat)
+
     with torch.no_grad():
-        average_loss.update(loss.item())
-        soft_losses.update(ce_loss(logits, labels).item())
-        hyperbolic_losses.update(hyperbolic_loss(embeddings, labels)[0].item())
+        feat_list, _ = model(test_feat)
         
-    return average_loss.avg, hyperbolic_losses.avg, soft_losses.avg, hyperbolic_losses.avg, soft_losses.avg
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Hyperbolic Loss for Face Verification')
-    parser.add_argument('--split_type', default='voice_only', type=str)
-    parser.add_argument('--save_dir', default='my_experiment', type=str)
-    parser.add_argument('--dim_embed', default=256, type=int)
-    parser.add_argument('--max_num_epoch', default=100, type=int)
-    parser.add_argument('--alpha_list', default=[0.5], type=list)
-    parser.add_argument('--batch_size', default=128, type=int)
-    parser.add_argument('--lr', default=1e-3, type=float)
-    parser.add_argument('--cuda', default=True, type=bool)
-    FLAGS = parser.parse_args()
+        feat_list = feat_list.data
+        
+        feat_list = feat_list.cpu().detach().numpy()
     
-    train_data, train_label = read_data(FLAGS)
-    main(train_data, train_label)
+        print('Total Number of Samples: ', len(feat_list))
+    
+        issame_lst = same_func(feat_list)
+        feat_list = np.asarray(feat_list)
+    
+        tpr, fpr, accuracy, val, val_std, far = evaluate(feat_list, issame_lst, 10)
+    
+        print('Accuracy: %1.3f+-%1.3f' % (np.mean(accuracy), np.std(accuracy)))
+    
+        auc = metrics.auc(fpr, tpr)
+        print('Area Under Curve (AUC): %1.3f' % auc)
+        fnr = 1-tpr
+        abs_diffs = np.abs(fpr-fnr)
+        min_index = np.argmin(abs_diffs)
+        eer = np.mean((fpr[min_index], fnr[min_index]))
+        # eer = fpr[np.nanargmin(np.absolute((fnr - fpr)))]
+    #    eer = brentq(lambda x: 1. - x - interpolate.interp1d(fpr, tpr)(x), 0., 1.)
+        print('Equal Error Rate (EER): %1.3f\n\n' % eer)
+    
+    return eer, auc

@@ -1,7 +1,7 @@
-import torch.nn as nn
-import hyptorch.nn as hypnn
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
+import hyptorch.nn as hypnn  # Ensure this is properly installed
 
 def make_fc_1d(f_in, f_out):
     return nn.Sequential(nn.Linear(f_in, f_out), 
@@ -9,6 +9,31 @@ def make_fc_1d(f_in, f_out):
                         nn.ReLU(inplace=True),
                         nn.Dropout(p=0.5))
 
+class HyperbolicLoss(nn.Module):
+    def __init__(self, c, reduction='mean'):
+        super(HyperbolicLoss, self).__init__()
+        self.c = c
+        self.reduction = reduction
+
+    def forward(self, s_fac, labels):
+        # Compute loss between the hyperbolic embeddings (s_fac, d_fac) and the true labels
+        dist = torch.cdist(s_fac, s_fac, p=2)  # Euclidean distance
+        target = labels.float()
+        loss = F.mse_loss(dist, target, reduction=self.reduction)
+
+        return loss
+
+        # # Compute loss between the hyperbolic embeddings (s_fac, d_fac) and the true labels
+        # dist = torch.cdist(s_fac, d_fac, p=2)  # Euclidean distance
+        # target = target.float()
+        # loss = F.mse_loss(dist, target, reduction=self.reduction)  # Mean squared error for hyperbolic distance
+
+        # return loss
+
+
+'''
+Embedding Extraction Module
+'''        
 
 class EmbedBranch(nn.Module):
     def __init__(self, feat_dim, embedding_dim):
@@ -24,30 +49,9 @@ class EmbedBranch(nn.Module):
         return x
 
 
-class HyperbolicLoss(nn.Module):
-    def __init__(self, FLAGS):
-        super(HyperbolicLoss, self).__init__()
-        self.device = (torch.device('cuda') if FLAGS.cuda else torch.device('cpu'))
-
-    def forward(self, features, labels=None):
-        features = F.normalize(features, p=2, dim=1)
-
-        labels = labels[:, None]
-
-        mask = torch.eq(labels, labels.t()).bool().to(self.device)
-        eye = torch.eye(mask.shape[0], mask.shape[1]).bool().to(self.device)
-
-        mask_pos = mask.masked_fill(eye, 0).float()
-        mask_neg = (~mask).float()
-        dot_prod = torch.matmul(features, features.t())
-
-        pos_pairs_mean = (mask_pos * dot_prod).sum() / (mask_pos.sum() + 1e-6)
-        neg_pairs_mean = torch.abs(mask_neg * dot_prod).sum() / (mask_neg.sum() + 1e-6)
-
-        loss = (1.0 - pos_pairs_mean) + (0.7 * neg_pairs_mean)
-
-        return loss, pos_pairs_mean, neg_pairs_mean
-
+'''
+Main Module
+'''
 
 class FOP(nn.Module):
     def __init__(self, args, feat_dim, n_class):
@@ -59,7 +63,7 @@ class FOP(nn.Module):
         self.ball_dim = 20
         self.ln = nn.Linear(args.dim_embed, self.ball_dim)
         self.tp = hypnn.ToPoincare(c=self.c, train_x=False, train_c =False, ball_dim=self.ball_dim)
-        self.mlr = hypnn.HyperbolicMLR(ball_dim=self.ball_dim, n_classes=901, c=self.c)
+        self.mlr = hypnn.HyperbolicMLR(ball_dim=self.ball_dim, n_classes=n_class, c=self.c)
 
         self.logits_layer = nn.Linear(args.dim_embed, n_class)
 
