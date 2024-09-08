@@ -208,6 +208,8 @@ def main(train_data, train_label):
                 s_fac_per_epoch /= num_of_batches
                 d_fac_per_epoch /= num_of_batches
                 
+                test_feat = train_data
+
                 loss_plot.append(loss_per_epoch)
                 if FLAGS.split_type == 'voice_only' or FLAGS.split_type == 'face_only':
                     eer, auc = onlineTestSingleModality.test(FLAGS, model, test_feat)

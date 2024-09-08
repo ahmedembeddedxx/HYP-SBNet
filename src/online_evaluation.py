@@ -181,11 +181,10 @@ def test(args, model, test_feat):
     model.eval()
     model.cuda()
 
-    #convert to tensor without test_feat = test_feat.cuda()
 
     test_feat = tf.convert_to_tensor(test_feat, dtype=tf.float32)    
  
-    test_feat = Variable(test_feat)
+    test_feat = tf.Variable(test_feat)
 
     with torch.no_grad():
         feat_list, _ = model(test_feat)
