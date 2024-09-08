@@ -3,6 +3,8 @@ from __future__ import print_function
 
 import argparse
 import os
+
+from tensorflow.python.ops.gen_array_ops import QuantizeAndDequantize
 os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 
 import numpy as np
@@ -154,7 +156,7 @@ def main(train_data, train_label):
     model = FOP(FLAGS, train_data.shape[1], n_class)
     model.apply(init_weights)
     
-    hyperbolic_loss = HyperbolicLoss(FLAGS).cuda()  # Use Hyperbolic Loss
+    hyperbolic_loss = HyperbolicLoss(FLAGS).cuda()
     
     if FLAGS.cuda:
         model.cuda()
@@ -209,7 +211,7 @@ def main(train_data, train_label):
                 s_fac_per_epoch /= num_of_batches
                 d_fac_per_epoch /= num_of_batches
                 
-                test_feat = train_data
+
 
                 loss_plot.append(loss_per_epoch)
                 if FLAGS.split_type == 'voice_only' or FLAGS.split_type == 'face_only':
@@ -251,7 +253,9 @@ def main(train_data, train_label):
         return loss_plot, min(eer_list), max(auc_list)
 
 
+
 def train(train_batch, labels, model, optimizer, hyperbolic_loss, alpha):
+    alpha = 1
     average_loss = RunningAverage()
     soft_losses = RunningAverage()
     hyperbolic_losses = RunningAverage()
@@ -275,7 +279,7 @@ def train(train_batch, labels, model, optimizer, hyperbolic_loss, alpha):
     loss_hyperbolic = hyperbolic_loss(s_fac, labels)
 
 
-    loss = loss_soft + alpha * loss_hyperbolic
+    loss = loss_soft + loss_hyperbolic
     average_loss.update(loss.item())
     soft_losses.update(loss_soft.item())
     hyperbolic_losses.update(loss_hyperbolic.item())
@@ -299,12 +303,13 @@ if __name__ == '__main__':
     parser.add_argument('--dim_embed', type=int, default=128, help='Dimension of embeddings')  # Add dim_embed argument
     parser.add_argument('--save_dir', type=str, default='fop')
     parser.add_argument('--max_num_epoch', type=int, default=100)
-    parser.add_argument('--alpha_list', nargs='+', type=float, default=[0.1, 0.5])
+    parser.add_argument('--alpha_list', nargs='+', type=float, default=[1, 1])
     
     FLAGS, unparsed = parser.parse_known_args()
     
     cudnn.benchmark = True
-    
+    test_feat = online_evaluation.read_data().cuda()
+
     train_data, train_label = read_data(FLAGS)
     
     loss_plot, eer, auc = main(train_data, train_label)

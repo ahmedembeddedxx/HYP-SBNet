@@ -180,7 +180,6 @@ def test(args, model, test_feat):
     model.eval()
     model.cuda()
 
-    test_feat = torch.from_numpy(test_feat).float().cuda()
     print("Testing features shape:", test_feat.shape)
 
     with torch.no_grad():
